@@ -960,6 +960,62 @@ static esp_err_t config_get_handler(httpd_req_t *req)
                 httpd_resp_send(req, NULL, 0);
                 return ESP_OK;
             }
+
+            /* Handle DHCP reservation add */
+            if (httpd_query_key_value(buf, "resv_add", param1, sizeof(param1)) == ESP_OK) {
+                if (httpd_query_key_value(buf, "resv_mac", param1, sizeof(param1)) == ESP_OK &&
+                    httpd_query_key_value(buf, "resv_ip", param2, sizeof(param2)) == ESP_OK &&
+                    httpd_query_key_value(buf, "resv_name", param3, sizeof(param3)) == ESP_OK) {
+                    preprocess_string(param1);
+                    preprocess_string(param2);
+                    preprocess_string(param3);
+                    uint8_t mac[6];
+                    unsigned mv[6];
+                    bool ok = (sscanf(param1, "%x:%x:%x:%x:%x:%x",
+                                      &mv[0],&mv[1],&mv[2],&mv[3],&mv[4],&mv[5]) == 6);
+                    uint32_t ip = esp_ip4addr_aton(param2);
+                    if (ok) {
+                        for (int i = 0; i < 6; i++) {
+                            if (mv[i] > 0xFF) ok = false;
+                            mac[i] = (uint8_t)mv[i];
+                        }
+                    }
+                    int nidx = dhcps_resv_find_by_name(param3);
+                    if (!ok || ip == 0 || ip == 0xFFFFFFFF ||
+                        param3[0] == '\0' || strlen(param3) >= DHCPS_RESV_NAME_LEN ||
+                        (nidx >= 0 && memcmp(dhcps_resv[nidx].mac, mac, 6) != 0)) {
+                        ESP_LOGW(TAG, "Invalid DHCP reservation rejected via web");
+                    } else if (static_ip && static_ip[0] && subnet_mask && subnet_mask[0] &&
+                               ((ip == esp_ip4addr_aton(static_ip)) ||
+                                ((ip & esp_ip4addr_aton(subnet_mask)) !=
+                                 (esp_ip4addr_aton(static_ip) & esp_ip4addr_aton(subnet_mask))))) {
+                        ESP_LOGW(TAG, "DHCP reservation outside management subnet rejected");
+                    } else {
+                        dhcps_resv_set(mac, ip, param3);
+                        ESP_LOGI(TAG, "DHCP reservation '%s' saved via web", param3);
+                    }
+                }
+                free(buf);
+                httpd_resp_set_status(req, "303 See Other");
+                httpd_resp_set_hdr(req, "Location", "/config");
+                httpd_resp_send(req, NULL, 0);
+                return ESP_OK;
+            }
+
+            /* Handle DHCP reservation delete (by name) */
+            if (httpd_query_key_value(buf, "resv_del", param1, sizeof(param1)) == ESP_OK) {
+                preprocess_string(param1);
+                int idx = dhcps_resv_find_by_name(param1);
+                if (idx >= 0) {
+                    dhcps_resv_remove(idx);
+                    ESP_LOGI(TAG, "DHCP reservation '%s' removed via web", param1);
+                }
+                free(buf);
+                httpd_resp_set_status(req, "303 See Other");
+                httpd_resp_set_hdr(req, "Location", "/config");
+                httpd_resp_send(req, NULL, 0);
+                return ESP_OK;
+            }
         }
         free(buf);
     }
@@ -1066,6 +1122,27 @@ static esp_err_t config_get_handler(httpd_req_t *req)
             (unsigned long)dhcps_lease_min,
             (dhcps_dns_ip   && dhcps_dns_ip[0])   ? dhcps_dns_ip   : "");
         httpd_resp_send_chunk(req, section, HTTPD_RESP_USE_STRLEN);
+    }
+
+    /* Chunk 5c: DHCP Reservations (variable number of rows) */
+    {
+        httpd_resp_send_chunk(req, CONFIG_CHUNK_RESV_HEAD, HTTPD_RESP_USE_STRLEN);
+        for (int i = 0; i < dhcps_resv_count; i++) {
+            char macbuf[18];
+            char ipbuf[16];
+            ip4_addr_t ip = { .addr = dhcps_resv[i].ip };
+            snprintf(macbuf, sizeof(macbuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     dhcps_resv[i].mac[0], dhcps_resv[i].mac[1], dhcps_resv[i].mac[2],
+                     dhcps_resv[i].mac[3], dhcps_resv[i].mac[4], dhcps_resv[i].mac[5]);
+            snprintf(ipbuf, sizeof(ipbuf), IPSTR, IP2STR(&ip));
+            char* safe_name = html_escape(dhcps_resv[i].name);
+            if (safe_name == NULL) continue;
+            snprintf(section, sizeof(section), CONFIG_CHUNK_RESV_ROW,
+                     safe_name, macbuf, ipbuf, safe_name);
+            free(safe_name);
+            httpd_resp_send_chunk(req, section, HTTPD_RESP_USE_STRLEN);
+        }
+        httpd_resp_send_chunk(req, CONFIG_CHUNK_RESV_TAIL, HTTPD_RESP_USE_STRLEN);
     }
 
     /* Chunk 6: Hostname */

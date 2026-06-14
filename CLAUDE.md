@@ -38,6 +38,7 @@ components/
 ├── cmd_router/          # CLI commands: set_ap, set_mgmt_ip, show, web_ui, set_router_password,
 │                        #   pcap, bytes, remote_console, syslog, set_led_gpio, set_tx_power, etc.
 ├── cmd_system/          # System commands: heap, restart, factory_reset, tasks
+├── dhcpserver/          # Vendored ESP-IDF DHCP server (IDF v5.3.2) + static MAC->IP reservations
 ├── http_server/         # Web UI server (pages: /, /config)
 ├── pcap_capture/        # PCAP packet capture with TCP streaming to Wireshark
 ├── remote_console/      # Network-accessible CLI via TCP (password protected)
@@ -104,6 +105,7 @@ All settings persist in NVS (Non-Volatile Storage) under namespace `esp32_nat`:
 - Web interface password (`web_password` key) and disable state
 - LED GPIO, TX power, timezone, AP disabled flag
 - Remote console and syslog settings
+- DHCP server pool/lease/DNS and static reservations (`dhcps_resv` blob: array of `{mac[6], ip, name[16]}`)
 - Survives firmware updates (use `esptool.py erase_flash` or `factory_reset` to clear)
 
 ### Critical SDK Configuration
@@ -144,6 +146,9 @@ pcap start                        # Start promiscuous packet capture
 pcap stop                         # Stop capture
 pcap snaplen [<bytes>]            # Get/set max capture bytes (64-1600)
 pcap status                       # Show capture statistics
+dhcps reserve <mac> <ip> <name>   # Add/update a static DHCP reservation (name <=15 chars)
+dhcps unreserve <mac|name>        # Remove a reservation by MAC or name
+dhcps reservations                # List configured DHCP reservations
 bytes                             # Show ETH byte counters
 bytes reset                       # Reset byte counters
 show status                       # Show bridge status (connection, clients, memory)

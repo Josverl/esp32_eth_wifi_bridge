@@ -47,6 +47,7 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "dhcpserver/dhcpserver.h"
+#include "dhcps_reservations.h"
 
 #include "cmd_system.h"
 #include "cmd_router.h"
@@ -536,6 +537,8 @@ void bridge_init(const char* static_ip, const char* subnet_mask, const char* gat
         initial_ip = ipInfo.ip.addr;
         my_ip      = ipInfo.ip.addr;
         dhcps_configure(br_netif, &ipInfo);
+        // Register static MAC->IP reservation resolver before starting the server
+        dhcps_set_reservation_resolver(dhcps_resv_lookup_cb, dhcps_resv_ip_taken_cb, NULL);
         ESP_LOGI(TAG, "Starting DHCP server on " IPSTR, IP2STR(&ipInfo.ip));
         ESP_ERROR_CHECK(esp_netif_dhcps_start(br_netif));
     } else if (strlen(static_ip) > 0 && strlen(subnet_mask) > 0 && strlen(gateway_addr) > 0) {
@@ -665,9 +668,11 @@ void app_main(void)
             dhcps_lease_min = (uint32_t)dhcps_lease;
         get_config_param_str("dhcps_dns", &dhcps_dns_ip);
         if (!dhcps_dns_ip)   dhcps_dns_ip   = param_set_default("");
+        dhcps_resv_load();
         if (dhcps_enabled)
-            ESP_LOGI(TAG, "DHCP server enabled: pool %s-%s, lease %lu min",
-                     dhcps_start_ip, dhcps_end_ip, (unsigned long)dhcps_lease_min);
+            ESP_LOGI(TAG, "DHCP server enabled: pool %s-%s, lease %lu min, %d reservation(s)",
+                     dhcps_start_ip, dhcps_end_ip, (unsigned long)dhcps_lease_min,
+                     dhcps_resv_count);
     }
 
     // Load LED GPIO setting from NVS (default -1 = disabled)

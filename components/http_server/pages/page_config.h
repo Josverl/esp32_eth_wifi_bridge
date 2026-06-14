@@ -105,6 +105,31 @@ setTimeout(\"location.href = '/'\", 10000);\
 <small>Requires static management IP. Disable your upstream DHCP server to avoid conflicts.</small>\
 </form>"
 
+/* DHCP Reservations section. Header, then one row per reservation, then the
+ * add-form tail. Row args: name(esc), mac, ip, name(esc, for delete). */
+#define CONFIG_CHUNK_RESV_HEAD "\
+<h2>DHCP Reservations</h2>\
+<table>\
+<tr><td>Name</td><td>MAC</td><td>IP</td><td></td></tr>"
+
+#define CONFIG_CHUNK_RESV_ROW "\
+<tr><td>%s</td><td>%s</td><td>%s</td>\
+<td><form action='' method='GET' style='display:inline'>\
+<input type='hidden' name='resv_del' value='%s'/>\
+<input type='submit' value='Delete' class='red-button'/></form></td></tr>"
+
+#define CONFIG_CHUNK_RESV_TAIL "\
+</table>\
+<form action='' method='GET'>\
+<input type='hidden' name='resv_add' value='1'/>\
+<table>\
+<tr><td>Name</td><td><input type='text' name='resv_name' placeholder='kitchen' maxlength='15'/></td></tr>\
+<tr><td>MAC</td><td><input type='text' name='resv_mac' placeholder='AA:BB:CC:DD:EE:FF'/></td></tr>\
+<tr><td>IP</td><td><input type='text' name='resv_ip' placeholder='192.168.4.20'/></td></tr>\
+<tr><td></td><td><input type='submit' value='Add reservation' class='ok-button'/></td></tr>\
+</table></form>\
+<small>Reserved addresses should sit outside the dynamic pool. Applied to new leases immediately.</small>"
+
 /* Hostname section - uses: hostname */
 #define CONFIG_CHUNK_HOSTNAME "\
 <h2>Hostname</h2>\

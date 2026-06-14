@@ -1,7 +1,7 @@
 /* CLI commands for the L2 Ethernet-WiFi bridge
  *
- * Stripped-down version: no NAT, no portmap, no DHCP reservations,
- * no ACL firewall, no VPN, no OLED, no WiFi STA.
+ * Stripped-down version: no NAT, no portmap, no ACL firewall,
+ * no VPN, no OLED, no WiFi STA.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -247,6 +247,140 @@ esp_err_t set_config_param_blob(const char* name, const void* data, size_t len)
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     return err;
+}
+
+/* Read a variable-length NVS blob, allocating a buffer sized to the stored
+ * value. Caller frees *out on success. */
+esp_err_t get_config_param_blob_alloc(const char* name, void** out, size_t* out_len)
+{
+    nvs_handle_t nvs;
+    *out = NULL;
+    if (out_len) *out_len = 0;
+    esp_err_t err = nvs_open(PARAM_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK) return err;
+    size_t len = 0;
+    err = nvs_get_blob(nvs, name, NULL, &len);
+    if (err != ESP_OK) {
+        nvs_close(nvs);
+        return err;
+    }
+    void* buf = malloc(len);
+    if (buf == NULL) {
+        nvs_close(nvs);
+        return ESP_ERR_NO_MEM;
+    }
+    err = nvs_get_blob(nvs, name, buf, &len);
+    nvs_close(nvs);
+    if (err != ESP_OK) {
+        free(buf);
+        return err;
+    }
+    *out = buf;
+    if (out_len) *out_len = len;
+    return ESP_OK;
+}
+
+/* ===================== DHCP static reservations ===================== */
+dhcps_resv_t dhcps_resv[DHCPS_MAX_RESV];
+int          dhcps_resv_count = 0;
+
+esp_err_t dhcps_resv_load(void)
+{
+    dhcps_resv_count = 0;
+    void*  buf = NULL;
+    size_t len = 0;
+    esp_err_t err = get_config_param_blob_alloc("dhcps_resv", &buf, &len);
+    if (err != ESP_OK || buf == NULL) {
+        return err;
+    }
+    int n = (int)(len / sizeof(dhcps_resv_t));
+    if (n > DHCPS_MAX_RESV) n = DHCPS_MAX_RESV;
+    memcpy(dhcps_resv, buf, (size_t)n * sizeof(dhcps_resv_t));
+    free(buf);
+    dhcps_resv_count = n;
+    for (int i = 0; i < dhcps_resv_count; i++) {
+        dhcps_resv[i].name[DHCPS_RESV_NAME_LEN - 1] = '\0';
+    }
+    return ESP_OK;
+}
+
+esp_err_t dhcps_resv_save(void)
+{
+    if (dhcps_resv_count <= 0) {
+        nvs_handle_t nvs;
+        esp_err_t err = nvs_open(PARAM_NAMESPACE, NVS_READWRITE, &nvs);
+        if (err != ESP_OK) return err;
+        err = nvs_erase_key(nvs, "dhcps_resv");
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+        if (err == ESP_OK) err = nvs_commit(nvs);
+        nvs_close(nvs);
+        return err;
+    }
+    return set_config_param_blob("dhcps_resv", dhcps_resv,
+                                 (size_t)dhcps_resv_count * sizeof(dhcps_resv_t));
+}
+
+int dhcps_resv_find_by_mac(const uint8_t mac[6])
+{
+    for (int i = 0; i < dhcps_resv_count; i++) {
+        if (memcmp(dhcps_resv[i].mac, mac, 6) == 0) return i;
+    }
+    return -1;
+}
+
+int dhcps_resv_find_by_name(const char *name)
+{
+    if (name == NULL) return -1;
+    for (int i = 0; i < dhcps_resv_count; i++) {
+        if (strncmp(dhcps_resv[i].name, name, DHCPS_RESV_NAME_LEN) == 0) return i;
+    }
+    return -1;
+}
+
+/* Add or update a reservation (keyed by MAC). Persists on success. */
+esp_err_t dhcps_resv_set(const uint8_t mac[6], uint32_t ip, const char *name)
+{
+    int idx = dhcps_resv_find_by_mac(mac);
+    if (idx < 0) {
+        if (dhcps_resv_count >= DHCPS_MAX_RESV) return ESP_ERR_NO_MEM;
+        idx = dhcps_resv_count++;
+    }
+    memcpy(dhcps_resv[idx].mac, mac, 6);
+    dhcps_resv[idx].ip = ip;
+    memset(dhcps_resv[idx].name, 0, DHCPS_RESV_NAME_LEN);
+    strncpy(dhcps_resv[idx].name, name, DHCPS_RESV_NAME_LEN - 1);
+    return dhcps_resv_save();
+}
+
+esp_err_t dhcps_resv_remove(int idx)
+{
+    if (idx < 0 || idx >= dhcps_resv_count) return ESP_ERR_INVALID_ARG;
+    for (int i = idx; i < dhcps_resv_count - 1; i++) {
+        dhcps_resv[i] = dhcps_resv[i + 1];
+    }
+    dhcps_resv_count--;
+    return dhcps_resv_save();
+}
+
+/* Resolver callbacks consumed by the vendored DHCP server. */
+bool dhcps_resv_lookup_cb(void *arg, const uint8_t mac[6], uint32_t *out_ip)
+{
+    (void)arg;
+    int idx = dhcps_resv_find_by_mac(mac);
+    if (idx < 0) return false;
+    if (out_ip) *out_ip = dhcps_resv[idx].ip;
+    return true;
+}
+
+bool dhcps_resv_ip_taken_cb(void *arg, uint32_t ip, const uint8_t mac[6])
+{
+    (void)arg;
+    for (int i = 0; i < dhcps_resv_count; i++) {
+        if (dhcps_resv[i].ip == ip && memcmp(dhcps_resv[i].mac, mac, 6) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void register_router(void)
@@ -1016,6 +1150,7 @@ static int show(int argc, char **argv)
             printf("  Lease: %lu min\n", (unsigned long)dhcps_lease_min);
             printf("  DNS: %s\n",
                    (dhcps_dns_ip && dhcps_dns_ip[0]) ? dhcps_dns_ip : "(self)");
+            printf("  Reservations: %d\n", dhcps_resv_count);
         }
 
         char* web_lock = NULL;
@@ -2066,6 +2201,39 @@ static void register_w5500(void)
 #endif // CONFIG_ETH_UPLINK_W5500
 
 /* 'dhcps' command — manage the built-in DHCP server */
+
+/* Parse "AA:BB:CC:DD:EE:FF" (also accepts '-' separators) into out[6]. */
+static bool dhcps_parse_mac(const char *s, uint8_t out[6])
+{
+    unsigned v[6];
+    if (sscanf(s, "%x:%x:%x:%x:%x:%x", &v[0],&v[1],&v[2],&v[3],&v[4],&v[5]) != 6 &&
+        sscanf(s, "%x-%x-%x-%x-%x-%x", &v[0],&v[1],&v[2],&v[3],&v[4],&v[5]) != 6) {
+        return false;
+    }
+    for (int i = 0; i < 6; i++) {
+        if (v[i] > 0xFF) return false;
+        out[i] = (uint8_t)v[i];
+    }
+    return true;
+}
+
+/* Print the configured reservations, marking those with an active lease. */
+static void dhcps_print_reservations(void)
+{
+    if (dhcps_resv_count == 0) {
+        printf("  (none)\n");
+        return;
+    }
+    for (int i = 0; i < dhcps_resv_count; i++) {
+        ip4_addr_t ip = { .addr = dhcps_resv[i].ip };
+        printf("  %-15s %02X:%02X:%02X:%02X:%02X:%02X  " IPSTR "\n",
+               dhcps_resv[i].name,
+               dhcps_resv[i].mac[0], dhcps_resv[i].mac[1], dhcps_resv[i].mac[2],
+               dhcps_resv[i].mac[3], dhcps_resv[i].mac[4], dhcps_resv[i].mac[5],
+               IP2STR(&ip));
+    }
+}
+
 static int dhcps_cmd(int argc, char **argv)
 {
     if (argc < 2) {
@@ -2096,6 +2264,9 @@ static int dhcps_cmd(int argc, char **argv)
                 if (!shown) printf("  (no active leases)\n");
             }
         }
+
+        printf("\nReservations:\n");
+        dhcps_print_reservations();
         return 0;
     }
 
@@ -2175,8 +2346,104 @@ static int dhcps_cmd(int argc, char **argv)
                strlen(dns) > 0 ? dns : "(bridge IP)");
         return 0;
 
+    } else if (strcmp(action, "reservations") == 0) {
+        printf("Reservations (%d/%d):\n", dhcps_resv_count, DHCPS_MAX_RESV);
+        dhcps_print_reservations();
+        return 0;
+
+    } else if (strcmp(action, "reserve") == 0) {
+        if (argc < 5) {
+            printf("Usage: dhcps reserve <mac> <ip> <name>\n");
+            return 1;
+        }
+        uint8_t mac[6];
+        if (!dhcps_parse_mac(argv[2], mac)) {
+            printf("Error: invalid MAC (expected AA:BB:CC:DD:EE:FF)\n");
+            return 1;
+        }
+        uint32_t ip = esp_ip4addr_aton(argv[3]);
+        if (ip == 0 || ip == 0xFFFFFFFF) {
+            printf("Error: invalid IP address\n");
+            return 1;
+        }
+        const char *name = argv[4];
+        if (name[0] == '\0' || strlen(name) >= DHCPS_RESV_NAME_LEN) {
+            printf("Error: name must be 1-%d characters\n", DHCPS_RESV_NAME_LEN - 1);
+            return 1;
+        }
+        /* Name must be unique (or belong to the same MAC we are updating). */
+        int nidx = dhcps_resv_find_by_name(name);
+        if (nidx >= 0 && memcmp(dhcps_resv[nidx].mac, mac, 6) != 0) {
+            printf("Error: name '%s' already used by another reservation\n", name);
+            return 1;
+        }
+        /* Validate against the management IP / subnet when configured. */
+        if (static_ip && static_ip[0] && subnet_mask && subnet_mask[0]) {
+            uint32_t mgmt = esp_ip4addr_aton(static_ip);
+            uint32_t mask = esp_ip4addr_aton(subnet_mask);
+            if (ip == mgmt) {
+                printf("Error: reserved IP equals the management IP\n");
+                return 1;
+            }
+            if ((ip & mask) != (mgmt & mask)) {
+                printf("Error: reserved IP is outside the management subnet\n");
+                return 1;
+            }
+        }
+        /* Warn if the reserved IP falls inside the dynamic pool range. */
+        if (dhcps_start_ip && dhcps_start_ip[0] && dhcps_end_ip && dhcps_end_ip[0]) {
+            uint32_t s = ntohl(esp_ip4addr_aton(dhcps_start_ip));
+            uint32_t e = ntohl(esp_ip4addr_aton(dhcps_end_ip));
+            uint32_t r = ntohl(ip);
+            if (r >= s && r <= e) {
+                printf("Warning: reserved IP is inside the dynamic pool "
+                       "(%s-%s); it will be withheld from other clients.\n",
+                       dhcps_start_ip, dhcps_end_ip);
+            }
+        }
+        esp_err_t err = dhcps_resv_set(mac, ip, name);
+        if (err == ESP_ERR_NO_MEM) {
+            printf("Error: reservation table full (max %d)\n", DHCPS_MAX_RESV);
+            return 1;
+        } else if (err != ESP_OK) {
+            printf("Error: failed to save reservation (%s)\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("Reserved %s -> %s for %02X:%02X:%02X:%02X:%02X:%02X. "
+               "Reboot to apply.\n",
+               name, argv[3], mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        return 0;
+
+    } else if (strcmp(action, "unreserve") == 0) {
+        if (argc < 3) {
+            printf("Usage: dhcps unreserve <mac|name>\n");
+            return 1;
+        }
+        uint8_t mac[6];
+        int idx;
+        if (dhcps_parse_mac(argv[2], mac)) {
+            idx = dhcps_resv_find_by_mac(mac);
+        } else {
+            idx = dhcps_resv_find_by_name(argv[2]);
+        }
+        if (idx < 0) {
+            printf("Error: no reservation matching '%s'\n", argv[2]);
+            return 1;
+        }
+        char removed[DHCPS_RESV_NAME_LEN];
+        strncpy(removed, dhcps_resv[idx].name, DHCPS_RESV_NAME_LEN);
+        removed[DHCPS_RESV_NAME_LEN - 1] = '\0';
+        esp_err_t err = dhcps_resv_remove(idx);
+        if (err != ESP_OK) {
+            printf("Error: failed to remove reservation (%s)\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("Removed reservation '%s'. Reboot to apply.\n", removed);
+        return 0;
+
     } else {
-        printf("Usage: dhcps [enable|disable|range <start> <end>|lease_time <min>|dns <ip>]\n");
+        printf("Usage: dhcps [enable|disable|range <start> <end>|lease_time <min>|"
+               "dns <ip>|reserve <mac> <ip> <name>|unreserve <mac|name>|reservations]\n");
         return 1;
     }
 }
@@ -2185,7 +2452,8 @@ static void register_dhcps(void)
 {
     const esp_console_cmd_t cmd = {
         .command = "dhcps",
-        .help = "Manage built-in DHCP server. Usage: dhcps [enable|disable|range <s> <e>|lease_time <min>|dns <ip>]",
+        .help = "Manage built-in DHCP server. Usage: dhcps [enable|disable|range <s> <e>|"
+                "lease_time <min>|dns <ip>|reserve <mac> <ip> <name>|unreserve <mac|name>|reservations]",
         .hint = NULL,
         .func = &dhcps_cmd,
         .argtable = NULL

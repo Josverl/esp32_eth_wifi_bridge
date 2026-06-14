@@ -27,6 +27,29 @@ extern char    *dhcps_end_ip;
 extern uint32_t dhcps_lease_min;
 extern char    *dhcps_dns_ip;
 
+// DHCP static reservations (MAC -> fixed IP, with a friendly name).
+// Stored in NVS as the packed blob "dhcps_resv".
+#define DHCPS_RESV_NAME_LEN 16   // bytes incl. NUL terminator (15 usable chars)
+#define DHCPS_MAX_RESV      16   // matches CONFIG_LWIP_DHCPS_MAX_STATION_NUM
+typedef struct __attribute__((packed)) {
+    uint8_t  mac[6];                  // client MAC address
+    uint32_t ip;                      // reserved IPv4, network byte order
+    char     name[DHCPS_RESV_NAME_LEN];// NUL-terminated label, unique
+} dhcps_resv_t;
+extern dhcps_resv_t dhcps_resv[DHCPS_MAX_RESV];
+extern int          dhcps_resv_count;
+
+// Reservation table helpers (implemented in cmd_router.c)
+esp_err_t dhcps_resv_load(void);
+esp_err_t dhcps_resv_save(void);
+int       dhcps_resv_find_by_mac(const uint8_t mac[6]);
+int       dhcps_resv_find_by_name(const char *name);
+esp_err_t dhcps_resv_set(const uint8_t mac[6], uint32_t ip, const char *name);
+esp_err_t dhcps_resv_remove(int idx);
+// Resolver callbacks passed to the vendored DHCP server.
+bool dhcps_resv_lookup_cb(void *arg, const uint8_t mac[6], uint32_t *out_ip);
+bool dhcps_resv_ip_taken_cb(void *arg, uint32_t ip, const uint8_t mac[6]);
+
 // WiFi regulatory country code (2-char + NUL, e.g. "US", "DE", "01" = world-safe)
 extern char wifi_country_code[3];
 
@@ -56,6 +79,7 @@ extern bool ap_disabled;
 void ap_set_enabled(bool enabled);
 
 esp_err_t get_config_param_blob(char* name, uint8_t** blob, size_t blob_len);
+esp_err_t get_config_param_blob_alloc(const char* name, void** out, size_t* out_len);
 esp_err_t get_config_param_int(char* name, int* param);
 esp_err_t get_config_param_str(char* name, char** param);
 

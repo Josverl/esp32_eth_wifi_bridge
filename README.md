@@ -148,13 +148,37 @@ dhcps dns 8.8.8.8
 ### Commands
 
 ```
-dhcps                           Show status and active leases
+dhcps                           Show status, active leases, and reservations
 dhcps enable                    Enable DHCP server (requires static IP, reboot to apply)
 dhcps disable                   Disable DHCP server (reboot to apply)
 dhcps range <start_ip> <end_ip> Set pool address range (max 100 addresses)
 dhcps lease_time <minutes>      Set lease duration (1–14400 min, default 120)
 dhcps dns <ip>                  Set DNS server to advertise (empty = bridge IP)
+dhcps reserve <mac> <ip> <name> Add/update a static reservation (name ≤ 15 chars)
+dhcps unreserve <mac|name>      Remove a reservation by MAC or by name
+dhcps reservations              List configured reservations
 ```
+
+### Static reservations
+
+A reservation always hands a specific client (identified by MAC address) the
+same IP address. Each reservation has a unique friendly **name** (up to 15
+characters) that can also be used to remove it.
+
+```
+dhcps reserve 24:6f:28:ab:cd:ef 192.168.10.20 printer
+dhcps unreserve printer
+```
+
+Notes:
+- The reserved IP must be within the management subnet and must not equal the
+  management IP. Reserved addresses should sit **outside** the dynamic pool
+  range; if a reservation falls inside the pool it is withheld from other
+  clients (you'll get a warning).
+- Up to 16 reservations are supported. They persist in NVS and are cleared by
+  `factory_reset`.
+- New requests honour reservations immediately; a client already holding a
+  different lease keeps it until the lease expires, it reconnects, or you reboot.
 
 To revert to using the upstream DHCP server, run `set_mgmt_ip dhcp` (this also disables the built-in DHCP server) and reboot.
 
@@ -248,6 +272,9 @@ Connect via serial at 115200 bps, or via the remote console.
 | `dhcps range <start> <end>` | Set address pool (max 100 addresses) |
 | `dhcps lease_time <minutes>` | Set lease duration (1–14400, default 120) |
 | `dhcps dns <ip>` | DNS server to advertise (empty = bridge IP) |
+| `dhcps reserve <mac> <ip> <name>` | Add/update a static reservation (name ≤ 15 chars) |
+| `dhcps unreserve <mac\|name>` | Remove a reservation by MAC or by name |
+| `dhcps reservations` | List configured reservations |
 | `set_hostname <name>` | Set DHCP hostname |
 | `set_tx_power <dBm>` | Set WiFi transmit power (2-20, 0=max) |
 | `set_tz <TZ string>` | Set POSIX timezone |
