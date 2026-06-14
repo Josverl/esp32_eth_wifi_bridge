@@ -1163,7 +1163,7 @@ POOL_CHECK:
             return 4;
         }
 
-        s16_t ret = parse_options(dhcps, &m->options[4], len);;
+        s16_t ret = parse_options(dhcps, &m->options[4], len);
 
         if (ret == DHCPS_STATE_RELEASE || ret == DHCPS_STATE_NAK) {
             if (pnode != NULL) {

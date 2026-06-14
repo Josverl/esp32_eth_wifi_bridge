@@ -981,14 +981,15 @@ static esp_err_t config_get_handler(httpd_req_t *req)
                         }
                     }
                     int nidx = dhcps_resv_find_by_name(param3);
+                    uint32_t mgmt_ip = (static_ip && static_ip[0]) ? esp_ip4addr_aton(static_ip) : 0;
+                    uint32_t mgmt_mask = (subnet_mask && subnet_mask[0]) ? esp_ip4addr_aton(subnet_mask) : 0;
                     if (!ok || ip == 0 || ip == 0xFFFFFFFF ||
                         param3[0] == '\0' || strlen(param3) >= DHCPS_RESV_NAME_LEN ||
                         (nidx >= 0 && memcmp(dhcps_resv[nidx].mac, mac, 6) != 0)) {
                         ESP_LOGW(TAG, "Invalid DHCP reservation rejected via web");
-                    } else if (static_ip && static_ip[0] && subnet_mask && subnet_mask[0] &&
-                               ((ip == esp_ip4addr_aton(static_ip)) ||
-                                ((ip & esp_ip4addr_aton(subnet_mask)) !=
-                                 (esp_ip4addr_aton(static_ip) & esp_ip4addr_aton(subnet_mask))))) {
+                    } else if (mgmt_ip && mgmt_mask &&
+                               ((ip == mgmt_ip) ||
+                                ((ip & mgmt_mask) != (mgmt_ip & mgmt_mask)))) {
                         ESP_LOGW(TAG, "DHCP reservation outside management subnet rejected");
                     } else {
                         dhcps_resv_set(mac, ip, param3);
